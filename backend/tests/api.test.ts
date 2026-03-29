@@ -7,8 +7,18 @@ function createTestDb(): Database.Database {
   const db = new Database(':memory:');
   db.pragma('foreign_keys = ON');
   db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS todos (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
       name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       due_date TEXT,
@@ -24,6 +34,7 @@ function createTestDb(): Database.Database {
       is_deleted INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (parent_recurring_id) REFERENCES todos(id)
     );
 
@@ -36,6 +47,20 @@ function createTestDb(): Database.Database {
       CHECK(todo_id != depends_on_id)
     );
 
+    CREATE TABLE IF NOT EXISTS todo_shares (
+      id TEXT PRIMARY KEY,
+      todo_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      shared_with_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'viewer'
+        CHECK(role IN ('viewer', 'editor')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (todo_id) REFERENCES todos(id) ON DELETE CASCADE,
+      FOREIGN KEY (owner_id) REFERENCES users(id),
+      FOREIGN KEY (shared_with_id) REFERENCES users(id),
+      UNIQUE(todo_id, shared_with_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status) WHERE is_deleted = 0;
     CREATE INDEX IF NOT EXISTS idx_todos_priority ON todos(priority) WHERE is_deleted = 0;
     CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todos(due_date) WHERE is_deleted = 0;
@@ -44,18 +69,79 @@ function createTestDb(): Database.Database {
   return db;
 }
 
+// Helper to register a user and get a token
+async function registerUser(
+  app: ReturnType<typeof createApp>,
+  email: string = 'test@test.com',
+  username: string = 'testuser',
+  password: string = 'password123'
+): Promise<{ token: string; user: any }> {
+  const res = await request(app)
+    .post('/api/auth/register')
+    .send({ email, username, password })
+    .expect(201);
+  return { token: res.body.token, user: res.body.user };
+}
+
 describe('API Integration Tests', () => {
   let app: ReturnType<typeof createApp>;
+  let token: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const db = createTestDb();
     app = createApp(db);
+    const auth = await registerUser(app);
+    token = auth.token;
+  });
+
+  describe('Auth Endpoints', () => {
+    it('should register a new user', async () => {
+      const res = await request(app)
+        .post('/api/auth/register')
+        .send({ email: 'new@test.com', username: 'newuser', password: 'password123' })
+        .expect(201);
+
+      expect(res.body.user.email).toBe('new@test.com');
+      expect(res.body.user.username).toBe('newuser');
+      expect(res.body.token).toBeTruthy();
+    });
+
+    it('should reject duplicate email', async () => {
+      await request(app)
+        .post('/api/auth/register')
+        .send({ email: 'test@test.com', username: 'other', password: 'password123' })
+        .expect(409);
+    });
+
+    it('should login with valid credentials', async () => {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'test@test.com', password: 'password123' })
+        .expect(200);
+
+      expect(res.body.token).toBeTruthy();
+      expect(res.body.user.email).toBe('test@test.com');
+    });
+
+    it('should reject invalid credentials', async () => {
+      await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'test@test.com', password: 'wrongpassword' })
+        .expect(401);
+    });
+
+    it('should require auth for todos', async () => {
+      await request(app)
+        .get('/api/todos')
+        .expect(401);
+    });
   });
 
   describe('POST /api/todos', () => {
     it('should create a todo', async () => {
       const res = await request(app)
         .post('/api/todos')
+        .set('Authorization', `Bearer ${token}`)
         .send({ name: 'Test Task' })
         .expect(201);
 
@@ -68,6 +154,7 @@ describe('API Integration Tests', () => {
     it('should reject empty name', async () => {
       const res = await request(app)
         .post('/api/todos')
+        .set('Authorization', `Bearer ${token}`)
         .send({ name: '' })
         .expect(400);
 
@@ -77,6 +164,7 @@ describe('API Integration Tests', () => {
     it('should reject missing name', async () => {
       const res = await request(app)
         .post('/api/todos')
+        .set('Authorization', `Bearer ${token}`)
         .send({ description: 'no name' })
         .expect(400);
 
@@ -86,6 +174,7 @@ describe('API Integration Tests', () => {
     it('should create with all fields', async () => {
       const res = await request(app)
         .post('/api/todos')
+        .set('Authorization', `Bearer ${token}`)
         .send({
           name: 'Full Task',
           description: 'Description',
@@ -102,11 +191,12 @@ describe('API Integration Tests', () => {
 
   describe('GET /api/todos', () => {
     it('should return paginated list', async () => {
-      await request(app).post('/api/todos').send({ name: 'Task 1' });
-      await request(app).post('/api/todos').send({ name: 'Task 2' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Task 1' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Task 2' });
 
       const res = await request(app)
         .get('/api/todos')
+        .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
       expect(res.body.data.length).toBe(2);
@@ -115,11 +205,12 @@ describe('API Integration Tests', () => {
     });
 
     it('should filter by status', async () => {
-      await request(app).post('/api/todos').send({ name: 'Task 1', status: 'in_progress' });
-      await request(app).post('/api/todos').send({ name: 'Task 2' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Task 1', status: 'in_progress' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Task 2' });
 
       const res = await request(app)
         .get('/api/todos?status=in_progress')
+        .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
       expect(res.body.data.length).toBe(1);
@@ -127,11 +218,12 @@ describe('API Integration Tests', () => {
     });
 
     it('should filter by priority', async () => {
-      await request(app).post('/api/todos').send({ name: 'High', priority: 'high' });
-      await request(app).post('/api/todos').send({ name: 'Low', priority: 'low' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'High', priority: 'high' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Low', priority: 'low' });
 
       const res = await request(app)
         .get('/api/todos?priority=high')
+        .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
       expect(res.body.data.length).toBe(1);
@@ -139,11 +231,12 @@ describe('API Integration Tests', () => {
     });
 
     it('should sort by name', async () => {
-      await request(app).post('/api/todos').send({ name: 'Bravo' });
-      await request(app).post('/api/todos').send({ name: 'Alpha' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Bravo' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Alpha' });
 
       const res = await request(app)
         .get('/api/todos?sortField=name&sortDirection=asc')
+        .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
       expect(res.body.data[0].name).toBe('Alpha');
@@ -151,11 +244,12 @@ describe('API Integration Tests', () => {
     });
 
     it('should search by name', async () => {
-      await request(app).post('/api/todos').send({ name: 'Buy groceries' });
-      await request(app).post('/api/todos').send({ name: 'Write code' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Buy groceries' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Write code' });
 
       const res = await request(app)
         .get('/api/todos?search=groceries')
+        .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
       expect(res.body.data.length).toBe(1);
@@ -164,25 +258,43 @@ describe('API Integration Tests', () => {
 
     it('should paginate', async () => {
       for (let i = 0; i < 5; i++) {
-        await request(app).post('/api/todos').send({ name: `Task ${i}` });
+        await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: `Task ${i}` });
       }
 
       const res = await request(app)
         .get('/api/todos?page=1&limit=2')
+        .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
       expect(res.body.data.length).toBe(2);
       expect(res.body.total).toBe(5);
       expect(res.body.totalPages).toBe(3);
     });
+
+    it('should isolate users\' todos', async () => {
+      // Create a second user
+      const auth2 = await registerUser(app, 'user2@test.com', 'user2');
+
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'User1 Task' });
+      await request(app).post('/api/todos').set('Authorization', `Bearer ${auth2.token}`).send({ name: 'User2 Task' });
+
+      const res1 = await request(app).get('/api/todos').set('Authorization', `Bearer ${token}`).expect(200);
+      expect(res1.body.data.length).toBe(1);
+      expect(res1.body.data[0].name).toBe('User1 Task');
+
+      const res2 = await request(app).get('/api/todos').set('Authorization', `Bearer ${auth2.token}`).expect(200);
+      expect(res2.body.data.length).toBe(1);
+      expect(res2.body.data[0].name).toBe('User2 Task');
+    });
   });
 
   describe('GET /api/todos/:id', () => {
     it('should get a specific todo', async () => {
-      const created = await request(app).post('/api/todos').send({ name: 'Find Me' });
+      const created = await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Find Me' });
 
       const res = await request(app)
         .get(`/api/todos/${created.body.id}`)
+        .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
       expect(res.body.name).toBe('Find Me');
@@ -191,16 +303,18 @@ describe('API Integration Tests', () => {
     it('should return 404 for non-existent id', async () => {
       await request(app)
         .get('/api/todos/non-existent')
+        .set('Authorization', `Bearer ${token}`)
         .expect(404);
     });
   });
 
   describe('PUT /api/todos/:id', () => {
     it('should update a todo', async () => {
-      const created = await request(app).post('/api/todos').send({ name: 'Original' });
+      const created = await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Original' });
 
       const res = await request(app)
         .put(`/api/todos/${created.body.id}`)
+        .set('Authorization', `Bearer ${token}`)
         .send({ name: 'Updated', version: 1 })
         .expect(200);
 
@@ -209,38 +323,43 @@ describe('API Integration Tests', () => {
     });
 
     it('should reject update without version', async () => {
-      const created = await request(app).post('/api/todos').send({ name: 'Original' });
+      const created = await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Original' });
 
       await request(app)
         .put(`/api/todos/${created.body.id}`)
+        .set('Authorization', `Bearer ${token}`)
         .send({ name: 'Updated' })
         .expect(400);
     });
 
     it('should return 409 on version conflict', async () => {
-      const created = await request(app).post('/api/todos').send({ name: 'Conflict Test' });
+      const created = await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Conflict Test' });
 
       // First update
       await request(app)
         .put(`/api/todos/${created.body.id}`)
+        .set('Authorization', `Bearer ${token}`)
         .send({ name: 'V2', version: 1 })
         .expect(200);
 
       // Second update with stale version
       await request(app)
         .put(`/api/todos/${created.body.id}`)
+        .set('Authorization', `Bearer ${token}`)
         .send({ name: 'Stale', version: 1 })
         .expect(409);
     });
 
     it('should return 422 when trying to start blocked task', async () => {
-      const dep = await request(app).post('/api/todos').send({ name: 'Blocker' });
+      const dep = await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Blocker' });
       const task = await request(app)
         .post('/api/todos')
+        .set('Authorization', `Bearer ${token}`)
         .send({ name: 'Blocked', dependsOn: [dep.body.id] });
 
       await request(app)
         .put(`/api/todos/${task.body.id}`)
+        .set('Authorization', `Bearer ${token}`)
         .send({ status: 'in_progress', version: 1 })
         .expect(422);
     });
@@ -248,34 +367,86 @@ describe('API Integration Tests', () => {
 
   describe('DELETE /api/todos/:id', () => {
     it('should soft delete a todo', async () => {
-      const created = await request(app).post('/api/todos').send({ name: 'Delete Me' });
+      const created = await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Delete Me' });
 
       await request(app)
         .delete(`/api/todos/${created.body.id}`)
+        .set('Authorization', `Bearer ${token}`)
         .expect(204);
 
       // Should not appear in list
-      const list = await request(app).get('/api/todos').expect(200);
+      const list = await request(app).get('/api/todos').set('Authorization', `Bearer ${token}`).expect(200);
       expect(list.body.data.find((t: any) => t.id === created.body.id)).toBeUndefined();
     });
 
     it('should return 404 for non-existent todo', async () => {
       await request(app)
         .delete('/api/todos/non-existent')
+        .set('Authorization', `Bearer ${token}`)
         .expect(404);
     });
   });
 
   describe('POST /api/todos/:id/restore', () => {
     it('should restore a deleted todo', async () => {
-      const created = await request(app).post('/api/todos').send({ name: 'Restore Me' });
-      await request(app).delete(`/api/todos/${created.body.id}`);
+      const created = await request(app).post('/api/todos').set('Authorization', `Bearer ${token}`).send({ name: 'Restore Me' });
+      await request(app).delete(`/api/todos/${created.body.id}`).set('Authorization', `Bearer ${token}`);
 
       const res = await request(app)
         .post(`/api/todos/${created.body.id}/restore`)
+        .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
       expect(res.body.isDeleted).toBe(false);
+    });
+  });
+
+  describe('Sharing', () => {
+    it('should share a todo with another user', async () => {
+      const auth2 = await registerUser(app, 'user2@test.com', 'user2');
+
+      const created = await request(app)
+        .post('/api/todos')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Shared Task' });
+
+      const res = await request(app)
+        .post(`/api/todos/${created.body.id}/shares`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ sharedWithEmail: 'user2@test.com', role: 'viewer' })
+        .expect(201);
+
+      expect(res.body.sharedWithEmail).toBe('user2@test.com');
+      expect(res.body.role).toBe('viewer');
+
+      // User 2 should see the shared todo
+      const list = await request(app)
+        .get('/api/todos')
+        .set('Authorization', `Bearer ${auth2.token}`)
+        .expect(200);
+      expect(list.body.data.length).toBe(1);
+      expect(list.body.data[0].name).toBe('Shared Task');
+    });
+
+    it('should list shares for a todo', async () => {
+      const auth2 = await registerUser(app, 'user2@test.com', 'user2');
+      const created = await request(app)
+        .post('/api/todos')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Shared' });
+
+      await request(app)
+        .post(`/api/todos/${created.body.id}/shares`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ sharedWithEmail: 'user2@test.com', role: 'editor' });
+
+      const res = await request(app)
+        .get(`/api/todos/${created.body.id}/shares`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(res.body.length).toBe(1);
+      expect(res.body[0].role).toBe('editor');
     });
   });
 
@@ -283,6 +454,7 @@ describe('API Integration Tests', () => {
     it('should auto-create next occurrence when completing recurring task', async () => {
       const created = await request(app)
         .post('/api/todos')
+        .set('Authorization', `Bearer ${token}`)
         .send({
           name: 'Recurring Task',
           dueDate: '2025-06-15T10:00:00.000Z',
@@ -291,9 +463,10 @@ describe('API Integration Tests', () => {
 
       await request(app)
         .put(`/api/todos/${created.body.id}`)
+        .set('Authorization', `Bearer ${token}`)
         .send({ status: 'completed', version: 1 });
 
-      const list = await request(app).get('/api/todos').expect(200);
+      const list = await request(app).get('/api/todos').set('Authorization', `Bearer ${token}`).expect(200);
       const nextOccurrence = list.body.data.find(
         (t: any) => t.name === 'Recurring Task' && t.status === 'not_started'
       );

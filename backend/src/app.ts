@@ -5,7 +5,10 @@ import swaggerJsdoc from 'swagger-jsdoc';
 import swaggerUi from 'swagger-ui-express';
 import Database from 'better-sqlite3';
 import { TodoService } from './services/todoService';
+import { AuthService } from './services/authService';
 import { createTodoRouter } from './routes/todos';
+import { createAuthRouter } from './routes/auth';
+import { createAuthMiddleware } from './middleware/auth';
 import { errorHandler } from './middleware/errorHandler';
 
 export function createApp(db: Database.Database) {
@@ -21,10 +24,19 @@ export function createApp(db: Database.Database) {
       openapi: '3.0.0',
       info: {
         title: 'TODO List API',
-        version: '1.0.0',
-        description: 'A TODO list API with recurring tasks, dependencies, filtering, and sorting',
+        version: '2.0.0',
+        description: 'A TODO list API with authentication, real-time collaboration, recurring tasks, dependencies, sharing, filtering, and sorting',
       },
       servers: [{ url: 'http://localhost:3001' }],
+      components: {
+        securitySchemes: {
+          bearerAuth: {
+            type: 'http',
+            scheme: 'bearer',
+            bearerFormat: 'JWT',
+          },
+        },
+      },
     },
     apis: [
       path.join(__dirname, 'routes', '*.ts'),
@@ -36,14 +48,30 @@ export function createApp(db: Database.Database) {
   app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
   app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
 
-  // Health check
+  // Health check (no auth required)
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
-  // Routes
+  // Services
+  const authService = new AuthService(db);
   const todoService = new TodoService(db);
-  app.use('/api/todos', createTodoRouter(todoService));
+
+  // Auth middleware
+  const authenticate = createAuthMiddleware(authService);
+
+  // Auth routes (no auth required for register/login)
+  const authRouter = createAuthRouter(authService);
+  app.use('/api/auth', (req, res, next) => {
+    // Apply auth middleware only to /me and /users/search
+    if (req.path === '/me' || req.path.startsWith('/users/')) {
+      return authenticate(req, res, next);
+    }
+    next();
+  }, authRouter);
+
+  // Todo routes (auth required)
+  app.use('/api/todos', authenticate, createTodoRouter(todoService, authService));
 
   // Serve frontend static files in production
   const publicDir = path.join(__dirname, '..', 'public');
@@ -58,6 +86,10 @@ export function createApp(db: Database.Database) {
 
   // Error handler
   app.use(errorHandler);
+
+  // Expose services for Socket.io setup
+  (app as any).todoService = todoService;
+  (app as any).authService = authService;
 
   return app;
 }

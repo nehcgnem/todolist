@@ -4,9 +4,24 @@ import {
   createTodoSchema,
   updateTodoSchema,
   listTodosQuerySchema,
+  shareTodoSchema,
+  updateShareSchema,
 } from '../middleware/validation';
+import { AuthService } from '../services/authService';
+import { broadcastTodoEvent } from '../socket';
+import type { Server as SocketServer } from 'socket.io';
 
-export function createTodoRouter(todoService: TodoService): Router {
+function getIO(req: Request): SocketServer | null {
+  return (req.app as any).io || null;
+}
+
+function broadcast(req: Request, type: string, todoId: string, userId: string, username: string, affectedUserIds: string[], data?: any): void {
+  const io = getIO(req);
+  if (!io) return;
+  broadcastTodoEvent(io, { type: type as any, todoId, userId, username, data }, affectedUserIds);
+}
+
+export function createTodoRouter(todoService: TodoService, authService: AuthService): Router {
   const router = Router();
 
   /**
@@ -15,6 +30,8 @@ export function createTodoRouter(todoService: TodoService): Router {
    *   get:
    *     summary: List all TODOs with filtering, sorting, and pagination
    *     tags: [Todos]
+   *     security:
+   *       - bearerAuth: []
    *     parameters:
    *       - in: query
    *         name: status
@@ -52,6 +69,12 @@ export function createTodoRouter(todoService: TodoService): Router {
    *           type: string
    *         description: Search in name and description
    *       - in: query
+   *         name: includeShared
+   *         schema:
+   *           type: boolean
+   *           default: true
+   *         description: Include todos shared with you
+   *       - in: query
    *         name: sortField
    *         schema:
    *           type: string
@@ -86,6 +109,7 @@ export function createTodoRouter(todoService: TodoService): Router {
   router.get('/', (req: Request, res: Response, next: NextFunction) => {
     try {
       const query = listTodosQuerySchema.parse(req.query);
+      const userId = req.user!.userId;
 
       const filter = {
         status: query.status,
@@ -94,6 +118,7 @@ export function createTodoRouter(todoService: TodoService): Router {
         dueDateTo: query.dueDateTo,
         dependencyStatus: query.dependencyStatus,
         includeDeleted: query.includeDeleted,
+        includeShared: query.includeShared,
         search: query.search,
       };
 
@@ -103,7 +128,7 @@ export function createTodoRouter(todoService: TodoService): Router {
 
       const pagination = { page: query.page, limit: query.limit };
 
-      const result = todoService.list(filter, sort, pagination);
+      const result = todoService.list(userId, filter, sort, pagination);
       res.json(result);
     } catch (err) {
       next(err);
@@ -116,6 +141,8 @@ export function createTodoRouter(todoService: TodoService): Router {
    *   get:
    *     summary: Get a TODO by ID
    *     tags: [Todos]
+   *     security:
+   *       - bearerAuth: []
    *     parameters:
    *       - in: path
    *         name: id
@@ -131,7 +158,8 @@ export function createTodoRouter(todoService: TodoService): Router {
    */
   router.get('/:id', (req: Request, res: Response, next: NextFunction) => {
     try {
-      const todo = todoService.getById(req.params.id);
+      const userId = req.user!.userId;
+      const todo = todoService.getById(req.params.id, userId);
       if (!todo) {
         res.status(404).json({ error: 'Not Found', message: `Todo '${req.params.id}' not found` });
         return;
@@ -148,6 +176,8 @@ export function createTodoRouter(todoService: TodoService): Router {
    *   post:
    *     summary: Create a new TODO
    *     tags: [Todos]
+   *     security:
+   *       - bearerAuth: []
    *     requestBody:
    *       required: true
    *       content:
@@ -191,7 +221,9 @@ export function createTodoRouter(todoService: TodoService): Router {
   router.post('/', (req: Request, res: Response, next: NextFunction) => {
     try {
       const input = createTodoSchema.parse(req.body);
-      const todo = todoService.create(input);
+      const userId = req.user!.userId;
+      const todo = todoService.create(input, userId);
+      broadcast(req, 'todo:created', todo.id, userId, req.user!.username, [userId], todo);
       res.status(201).json(todo);
     } catch (err) {
       next(err);
@@ -204,6 +236,8 @@ export function createTodoRouter(todoService: TodoService): Router {
    *   put:
    *     summary: Update a TODO
    *     tags: [Todos]
+   *     security:
+   *       - bearerAuth: []
    *     parameters:
    *       - in: path
    *         name: id
@@ -261,7 +295,10 @@ export function createTodoRouter(todoService: TodoService): Router {
   router.put('/:id', (req: Request, res: Response, next: NextFunction) => {
     try {
       const input = updateTodoSchema.parse(req.body);
-      const todo = todoService.update(req.params.id, input);
+      const userId = req.user!.userId;
+      const todo = todoService.update(req.params.id, input, userId);
+      const affectedUserIds = todoService.getAffectedUserIds(req.params.id);
+      broadcast(req, 'todo:updated', req.params.id, userId, req.user!.username, affectedUserIds, todo);
       res.json(todo);
     } catch (err) {
       next(err);
@@ -274,6 +311,8 @@ export function createTodoRouter(todoService: TodoService): Router {
    *   delete:
    *     summary: Soft-delete a TODO
    *     tags: [Todos]
+   *     security:
+   *       - bearerAuth: []
    *     parameters:
    *       - in: path
    *         name: id
@@ -289,7 +328,10 @@ export function createTodoRouter(todoService: TodoService): Router {
    */
   router.delete('/:id', (req: Request, res: Response, next: NextFunction) => {
     try {
-      todoService.delete(req.params.id);
+      const userId = req.user!.userId;
+      const affectedUserIds = todoService.getAffectedUserIds(req.params.id);
+      todoService.delete(req.params.id, userId);
+      broadcast(req, 'todo:deleted', req.params.id, userId, req.user!.username, affectedUserIds);
       res.status(204).send();
     } catch (err) {
       next(err);
@@ -302,6 +344,8 @@ export function createTodoRouter(todoService: TodoService): Router {
    *   post:
    *     summary: Restore a soft-deleted TODO
    *     tags: [Todos]
+   *     security:
+   *       - bearerAuth: []
    *     parameters:
    *       - in: path
    *         name: id
@@ -317,8 +361,144 @@ export function createTodoRouter(todoService: TodoService): Router {
    */
   router.post('/:id/restore', (req: Request, res: Response, next: NextFunction) => {
     try {
-      const todo = todoService.restore(req.params.id);
+      const userId = req.user!.userId;
+      const todo = todoService.restore(req.params.id, userId);
+      const affectedUserIds = todoService.getAffectedUserIds(req.params.id);
+      broadcast(req, 'todo:restored', req.params.id, userId, req.user!.username, affectedUserIds, todo);
       res.json(todo);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // --- Sharing endpoints ---
+
+  /**
+   * @swagger
+   * /api/todos/{id}/shares:
+   *   post:
+   *     summary: Share a TODO with another user
+   *     tags: [Sharing]
+   *     security:
+   *       - bearerAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [sharedWithEmail]
+   *             properties:
+   *               sharedWithEmail:
+   *                 type: string
+   *                 format: email
+   *               role:
+   *                 type: string
+   *                 enum: [viewer, editor]
+   *     responses:
+   *       201:
+   *         description: Share created
+   */
+  router.post('/:id/shares', (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user!.userId;
+      const input = shareTodoSchema.parse(req.body);
+      
+      // Lookup the target user by email
+      const targetUser = authService.getUserByEmail(input.sharedWithEmail);
+      if (!targetUser) {
+        res.status(404).json({ error: 'Not Found', message: 'User not found with that email' });
+        return;
+      }
+
+      const share = todoService.shareTodo(req.params.id, userId, targetUser.id, input.role);
+      const affectedUserIds = todoService.getAffectedUserIds(req.params.id);
+      broadcast(req, 'todo:shared', req.params.id, userId, req.user!.username, affectedUserIds, share);
+      res.status(201).json(share);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * @swagger
+   * /api/todos/{id}/shares:
+   *   get:
+   *     summary: Get all shares for a TODO
+   *     tags: [Sharing]
+   *     security:
+   *       - bearerAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *     responses:
+   *       200:
+   *         description: List of shares
+   */
+  router.get('/:id/shares', (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user!.userId;
+      const shares = todoService.getSharesForTodo(req.params.id, userId);
+      res.json(shares);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * @swagger
+   * /api/todos/{id}/shares/{shareId}:
+   *   put:
+   *     summary: Update a share's role
+   *     tags: [Sharing]
+   *     security:
+   *       - bearerAuth: []
+   */
+  router.put('/:id/shares/:shareId', (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user!.userId;
+      const input = updateShareSchema.parse(req.body);
+      // Re-share to update role
+      const share = todoService.getSharesForTodo(req.params.id, userId)
+        .find(s => s.id === req.params.shareId);
+      if (!share) {
+        res.status(404).json({ error: 'Not Found', message: 'Share not found' });
+        return;
+      }
+      const updated = todoService.shareTodo(req.params.id, userId, share.sharedWithId, input.role);
+      const affectedUserIds = todoService.getAffectedUserIds(req.params.id);
+      broadcast(req, 'todo:shared', req.params.id, userId, req.user!.username, affectedUserIds, updated);
+      res.json(updated);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * @swagger
+   * /api/todos/{id}/shares/{shareId}:
+   *   delete:
+   *     summary: Remove a share
+   *     tags: [Sharing]
+   *     security:
+   *       - bearerAuth: []
+   */
+  router.delete('/:id/shares/:shareId', (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user!.userId;
+      const affectedUserIds = todoService.getAffectedUserIds(req.params.id);
+      todoService.removeTodoShare(req.params.shareId, userId);
+      broadcast(req, 'todo:unshared', req.params.id, userId, req.user!.username, affectedUserIds);
+      res.status(204).send();
     } catch (err) {
       next(err);
     }

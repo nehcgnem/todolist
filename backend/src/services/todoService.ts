@@ -12,19 +12,22 @@ import {
   TodoStatus,
   TodoPriority,
   RecurrencePattern,
+  ShareRole,
+  TodoShare,
+  TodoShareWithUser,
 } from '../types/todo';
 
 export class TodoService {
   constructor(private db: Database.Database) {}
 
-  create(input: CreateTodoInput): TodoWithDependencies {
+  create(input: CreateTodoInput, userId: string): TodoWithDependencies {
     const id = uuidv4();
     const now = new Date().toISOString();
 
     const insertTodo = this.db.prepare(`
-      INSERT INTO todos (id, name, description, due_date, status, priority,
+      INSERT INTO todos (id, user_id, name, description, due_date, status, priority,
         recurrence_pattern, recurrence_interval, parent_recurring_id, version, is_deleted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
     `);
 
     const insertDep = this.db.prepare(`
@@ -34,6 +37,7 @@ export class TodoService {
     const transaction = this.db.transaction(() => {
       insertTodo.run(
         id,
+        userId,
         input.name,
         input.description || '',
         input.dueDate || null,
@@ -48,8 +52,12 @@ export class TodoService {
 
       if (input.dependsOn && input.dependsOn.length > 0) {
         for (const depId of input.dependsOn) {
-          // Verify dependency exists and is not deleted
-          const dep = this.db.prepare('SELECT id FROM todos WHERE id = ? AND is_deleted = 0').get(depId) as any;
+          // Verify dependency exists, is not deleted, and is accessible by this user
+          const dep = this.db.prepare(
+            `SELECT id FROM todos WHERE id = ? AND is_deleted = 0 AND (
+              user_id = ? OR id IN (SELECT todo_id FROM todo_shares WHERE shared_with_id = ?)
+            )`
+          ).get(depId, userId, userId) as any;
           if (!dep) {
             throw new Error(`Dependency todo '${depId}' not found`);
           }
@@ -57,21 +65,31 @@ export class TodoService {
         }
       }
 
-      return this.getById(id)!;
+      return this.getById(id, userId)!;
     });
 
     return transaction();
   }
 
-  getById(id: string, includeDeleted = false): TodoWithDependencies | null {
+  getById(id: string, userId: string, includeDeleted = false): TodoWithDependencies | null {
     const whereClause = includeDeleted ? '' : 'AND is_deleted = 0';
-    const row = this.db.prepare(`SELECT * FROM todos WHERE id = ? ${whereClause}`).get(id) as any;
+    const row = this.db.prepare(
+      `SELECT t.*, 
+        CASE 
+          WHEN t.user_id = ? THEN 'owner'
+          ELSE (SELECT role FROM todo_shares WHERE todo_id = t.id AND shared_with_id = ?)
+        END as share_role
+       FROM todos t 
+       WHERE t.id = ? ${whereClause}
+         AND (t.user_id = ? OR t.id IN (SELECT todo_id FROM todo_shares WHERE shared_with_id = ?))`
+    ).get(userId, userId, id, userId, userId) as any;
     if (!row) return null;
 
-    return this.enrichTodo(row);
+    return this.enrichTodo(row, userId);
   }
 
   list(
+    userId: string,
     filter?: TodoFilter,
     sort?: TodoSort,
     pagination?: PaginationParams
@@ -82,6 +100,15 @@ export class TodoService {
     // By default, don't include deleted
     if (!filter?.includeDeleted) {
       conditions.push('t.is_deleted = 0');
+    }
+
+    // User access: own todos + shared todos
+    if (filter?.includeShared !== false) {
+      conditions.push('(t.user_id = ? OR t.id IN (SELECT todo_id FROM todo_shares WHERE shared_with_id = ?))');
+      params.push(userId, userId);
+    } else {
+      conditions.push('t.user_id = ?');
+      params.push(userId);
     }
 
     if (filter?.status) {
@@ -162,7 +189,7 @@ export class TodoService {
     const query = `SELECT t.* FROM todos t ${whereClause} ${orderClause} LIMIT ? OFFSET ?`;
     const rows = this.db.prepare(query).all(...params, limit, offset) as any[];
 
-    const data = rows.map((row) => this.enrichTodo(row));
+    const data = rows.map((row) => this.enrichTodo(row, userId));
 
     return {
       data,
@@ -173,11 +200,14 @@ export class TodoService {
     };
   }
 
-  update(id: string, input: UpdateTodoInput): TodoWithDependencies {
-    const existing = this.getById(id);
+  update(id: string, input: UpdateTodoInput, userId: string): TodoWithDependencies {
+    const existing = this.getById(id, userId);
     if (!existing) {
       throw new Error(`Todo '${id}' not found`);
     }
+
+    // Check write permission
+    this.checkWritePermission(id, userId);
 
     // Optimistic locking check
     if (existing.version !== input.version) {
@@ -248,23 +278,26 @@ export class TodoService {
 
       // Handle recurring task completion
       if (input.status === TodoStatus.COMPLETED && existing.status !== TodoStatus.COMPLETED) {
-        const updatedTodo = this.getById(id)!;
+        const updatedTodo = this.getById(id, userId)!;
         if (updatedTodo.recurrencePattern) {
-          this.createNextRecurrence(updatedTodo);
+          this.createNextRecurrence(updatedTodo, userId);
         }
       }
 
-      return this.getById(id)!;
+      return this.getById(id, userId)!;
     });
 
     return transaction();
   }
 
-  delete(id: string): void {
-    const existing = this.getById(id);
+  delete(id: string, userId: string): void {
+    const existing = this.getById(id, userId);
     if (!existing) {
       throw new Error(`Todo '${id}' not found`);
     }
+
+    // Check write permission (owner or editor)
+    this.checkWritePermission(id, userId);
 
     // Soft delete
     const now = new Date().toISOString();
@@ -273,8 +306,8 @@ export class TodoService {
     `).run(now, id);
   }
 
-  restore(id: string): TodoWithDependencies {
-    const existing = this.getById(id, true);
+  restore(id: string, userId: string): TodoWithDependencies {
+    const existing = this.getById(id, userId, true);
     if (!existing) {
       throw new Error(`Todo '${id}' not found`);
     }
@@ -282,15 +315,137 @@ export class TodoService {
       throw new Error(`Todo '${id}' is not deleted`);
     }
 
+    // Only owner can restore
+    if (existing.userId !== userId) {
+      throw new Error('Forbidden: only the owner can restore a todo');
+    }
+
     const now = new Date().toISOString();
     this.db.prepare(`
       UPDATE todos SET is_deleted = 0, status = 'not_started', updated_at = ? WHERE id = ?
     `).run(now, id);
 
-    return this.getById(id)!;
+    return this.getById(id, userId)!;
   }
 
-  private createNextRecurrence(todo: TodoWithDependencies): TodoWithDependencies {
+  // --- Sharing methods ---
+
+  shareTodo(todoId: string, ownerId: string, sharedWithId: string, role: ShareRole): TodoShareWithUser {
+    // Verify the owner actually owns this todo
+    const todo = this.db.prepare('SELECT * FROM todos WHERE id = ? AND user_id = ?').get(todoId, ownerId) as any;
+    if (!todo) {
+      throw new Error(`Todo '${todoId}' not found or you are not the owner`);
+    }
+
+    // Cannot share with self
+    if (ownerId === sharedWithId) {
+      throw new Error('Cannot share a todo with yourself');
+    }
+
+    // Check if already shared
+    const existing = this.db.prepare(
+      'SELECT id FROM todo_shares WHERE todo_id = ? AND shared_with_id = ?'
+    ).get(todoId, sharedWithId) as any;
+    if (existing) {
+      // Update the role
+      this.db.prepare('UPDATE todo_shares SET role = ? WHERE id = ?').run(role, existing.id);
+      return this.getShareById(existing.id)!;
+    }
+
+    const id = uuidv4();
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO todo_shares (id, todo_id, owner_id, shared_with_id, role, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, todoId, ownerId, sharedWithId, role, now);
+
+    return this.getShareById(id)!;
+  }
+
+  removeTodoShare(shareId: string, userId: string): void {
+    const share = this.getShareById(shareId);
+    if (!share) {
+      throw new Error(`Share '${shareId}' not found`);
+    }
+    // Only the owner can remove shares
+    if (share.ownerId !== userId) {
+      throw new Error('Forbidden: only the owner can remove shares');
+    }
+    this.db.prepare('DELETE FROM todo_shares WHERE id = ?').run(shareId);
+  }
+
+  getSharesForTodo(todoId: string, userId: string): TodoShareWithUser[] {
+    // Verify user has access
+    const todo = this.getById(todoId, userId);
+    if (!todo) {
+      throw new Error(`Todo '${todoId}' not found`);
+    }
+    const rows = this.db.prepare(`
+      SELECT ts.*, u.username as shared_with_username, u.email as shared_with_email
+      FROM todo_shares ts
+      JOIN users u ON u.id = ts.shared_with_id
+      WHERE ts.todo_id = ?
+    `).all(todoId) as any[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      todoId: row.todo_id,
+      ownerId: row.owner_id,
+      sharedWithId: row.shared_with_id,
+      sharedWithUsername: row.shared_with_username,
+      sharedWithEmail: row.shared_with_email,
+      role: row.role as ShareRole,
+      createdAt: row.created_at,
+    }));
+  }
+
+  /** Get the owner + all shared-with user IDs for a given todo (used for broadcasting) */
+  getAffectedUserIds(todoId: string): string[] {
+    const todo = this.db.prepare('SELECT user_id FROM todos WHERE id = ?').get(todoId) as any;
+    if (!todo) return [];
+    const shares = this.db.prepare(
+      'SELECT shared_with_id FROM todo_shares WHERE todo_id = ?'
+    ).all(todoId) as any[];
+    return [todo.user_id, ...shares.map((s: any) => s.shared_with_id)];
+  }
+
+  private getShareById(id: string): TodoShareWithUser | null {
+    const row = this.db.prepare(`
+      SELECT ts.*, u.username as shared_with_username, u.email as shared_with_email
+      FROM todo_shares ts
+      JOIN users u ON u.id = ts.shared_with_id
+      WHERE ts.id = ?
+    `).get(id) as any;
+    if (!row) return null;
+    return {
+      id: row.id,
+      todoId: row.todo_id,
+      ownerId: row.owner_id,
+      sharedWithId: row.shared_with_id,
+      sharedWithUsername: row.shared_with_username,
+      sharedWithEmail: row.shared_with_email,
+      role: row.role as ShareRole,
+      createdAt: row.created_at,
+    };
+  }
+
+  private checkWritePermission(todoId: string, userId: string): void {
+    // Owner always has write access
+    const isOwner = this.db.prepare(
+      'SELECT id FROM todos WHERE id = ? AND user_id = ?'
+    ).get(todoId, userId);
+    if (isOwner) return;
+
+    // Check if shared with editor role
+    const share = this.db.prepare(
+      'SELECT role FROM todo_shares WHERE todo_id = ? AND shared_with_id = ?'
+    ).get(todoId, userId) as any;
+    if (!share || share.role !== ShareRole.EDITOR) {
+      throw new Error('Forbidden: you do not have permission to edit this todo');
+    }
+  }
+
+  private createNextRecurrence(todo: TodoWithDependencies, userId: string): TodoWithDependencies {
     const nextDueDate = this.calculateNextDueDate(
       todo.dueDate,
       todo.recurrencePattern as RecurrencePattern,
@@ -300,16 +455,19 @@ export class TodoService {
     // Link to the original recurring task (or its root parent if this was already a child)
     const rootParentId = todo.parentRecurringId || todo.id;
 
-    return this.create({
-      name: todo.name,
-      description: todo.description,
-      dueDate: nextDueDate,
-      status: TodoStatus.NOT_STARTED,
-      priority: todo.priority,
-      recurrencePattern: todo.recurrencePattern as RecurrencePattern,
-      recurrenceInterval: todo.recurrenceInterval,
-      parentRecurringId: rootParentId,
-    });
+    return this.create(
+      {
+        name: todo.name,
+        description: todo.description,
+        dueDate: nextDueDate,
+        status: TodoStatus.NOT_STARTED,
+        priority: todo.priority,
+        recurrencePattern: todo.recurrencePattern as RecurrencePattern,
+        recurrenceInterval: todo.recurrenceInterval,
+        parentRecurringId: rootParentId,
+      },
+      userId
+    );
   }
 
   private calculateNextDueDate(
@@ -361,7 +519,7 @@ export class TodoService {
     return false;
   }
 
-  private enrichTodo(row: any): TodoWithDependencies {
+  private enrichTodo(row: any, userId: string): TodoWithDependencies {
     const deps = this.db
       .prepare('SELECT depends_on_id FROM todo_dependencies WHERE todo_id = ?')
       .all(row.id) as any[];
@@ -381,8 +539,20 @@ export class TodoService {
       isBlocked = blockedCheck.cnt > 0;
     }
 
+    // Get shares for this todo
+    const shares = this.db.prepare(`
+      SELECT ts.*, u.username as shared_with_username, u.email as shared_with_email
+      FROM todo_shares ts
+      JOIN users u ON u.id = ts.shared_with_id
+      WHERE ts.todo_id = ?
+    `).all(row.id) as any[];
+
+    const shareRole: ShareRole | 'owner' =
+      row.share_role || (row.user_id === userId ? 'owner' : 'viewer');
+
     return {
       id: row.id,
+      userId: row.user_id,
       name: row.name,
       description: row.description,
       dueDate: row.due_date,
@@ -397,6 +567,17 @@ export class TodoService {
       updatedAt: row.updated_at,
       dependsOn,
       isBlocked,
+      shares: shares.map((s: any) => ({
+        id: s.id,
+        todoId: s.todo_id,
+        ownerId: s.owner_id,
+        sharedWithId: s.shared_with_id,
+        sharedWithUsername: s.shared_with_username,
+        sharedWithEmail: s.shared_with_email,
+        role: s.role as ShareRole,
+        createdAt: s.created_at,
+      })),
+      shareRole,
     };
   }
 }

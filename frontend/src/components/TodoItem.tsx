@@ -1,11 +1,17 @@
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { useDroppable } from '@dnd-kit/core';
 import { TodoStatus } from '../types/todo';
 import type { Todo } from '../types/todo';
 import { todoApi } from '../api/todoApi';
+import { useAuth } from '../hooks/useAuth';
 
 interface TodoItemProps {
   todo: Todo;
   onEdit: (todo: Todo) => void;
   onRefresh: () => void;
+  onShare: (todo: Todo) => void;
+  isDragOverlay?: boolean;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -21,7 +27,38 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: '#27ae60',
 };
 
-export function TodoItem({ todo, onEdit, onRefresh }: TodoItemProps) {
+export function TodoItem({ todo, onEdit, onRefresh, onShare, isDragOverlay }: TodoItemProps) {
+  const { user } = useAuth();
+  const isOwner = todo.userId === user?.id;
+  const canEdit = isOwner || todo.shareRole === 'editor';
+
+  // Sortable (for drag)
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setSortableRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: todo.id,
+    data: { type: 'todo', todo },
+  });
+
+  // Droppable (for dependency drop targets)
+  const { isOver, setNodeRef: setDroppableRef } = useDroppable({
+    id: `drop-${todo.id}`,
+    data: { type: 'todo-drop', todoId: todo.id },
+  });
+
+  const style = isDragOverlay
+    ? { opacity: 0.9 }
+    : {
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.4 : 1,
+      };
+
   const handleDelete = async () => {
     if (!confirm(`Delete "${todo.name}"? It can be restored later.`)) return;
     try {
@@ -48,7 +85,7 @@ export function TodoItem({ todo, onEdit, onRefresh }: TodoItemProps) {
     todo.status !== TodoStatus.ARCHIVED;
 
   const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '—';
+    if (!dateStr) return '\u2014';
     return new Date(dateStr).toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -58,8 +95,29 @@ export function TodoItem({ todo, onEdit, onRefresh }: TodoItemProps) {
     });
   };
 
+  // Merge refs
+  const setRefs = (el: HTMLDivElement | null) => {
+    setSortableRef(el);
+    setDroppableRef(el);
+  };
+
   return (
-    <div className={`todo-item ${todo.status} ${isOverdue ? 'overdue' : ''} ${todo.isBlocked ? 'blocked' : ''}`}>
+    <div
+      ref={setRefs}
+      style={style}
+      className={`todo-item ${todo.status} ${isOverdue ? 'overdue' : ''} ${todo.isBlocked ? 'blocked' : ''} ${isOver ? 'drop-target' : ''} ${isDragOverlay ? 'drag-overlay' : ''}`}
+    >
+      <div className="drag-handle" {...attributes} {...listeners}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <circle cx="5" cy="3" r="1.5" />
+          <circle cx="11" cy="3" r="1.5" />
+          <circle cx="5" cy="8" r="1.5" />
+          <circle cx="11" cy="8" r="1.5" />
+          <circle cx="5" cy="13" r="1.5" />
+          <circle cx="11" cy="13" r="1.5" />
+        </svg>
+      </div>
+
       <div className="todo-item-main">
         <div className="todo-item-header">
           <span
@@ -81,6 +139,11 @@ export function TodoItem({ todo, onEdit, onRefresh }: TodoItemProps) {
             </span>
           )}
           {isOverdue && <span className="overdue-badge">OVERDUE</span>}
+          {!isOwner && todo.shareRole && (
+            <span className="share-role-indicator">
+              Shared ({todo.shareRole})
+            </span>
+          )}
         </div>
 
         <h3 className="todo-item-name">{todo.name}</h3>
@@ -94,11 +157,14 @@ export function TodoItem({ todo, onEdit, onRefresh }: TodoItemProps) {
           {todo.dependsOn.length > 0 && (
             <span>Dependencies: {todo.dependsOn.length}</span>
           )}
+          {todo.shares && todo.shares.length > 0 && (
+            <span>Shared with {todo.shares.length} user{todo.shares.length > 1 ? 's' : ''}</span>
+          )}
         </div>
       </div>
 
       <div className="todo-item-actions">
-        {todo.status === TodoStatus.NOT_STARTED && !todo.isBlocked && (
+        {canEdit && todo.status === TodoStatus.NOT_STARTED && !todo.isBlocked && (
           <button
             className="btn btn-small btn-start"
             onClick={() => handleQuickStatus(TodoStatus.IN_PROGRESS)}
@@ -106,7 +172,7 @@ export function TodoItem({ todo, onEdit, onRefresh }: TodoItemProps) {
             Start
           </button>
         )}
-        {todo.status === TodoStatus.IN_PROGRESS && (
+        {canEdit && todo.status === TodoStatus.IN_PROGRESS && (
           <button
             className="btn btn-small btn-complete"
             onClick={() => handleQuickStatus(TodoStatus.COMPLETED)}
@@ -114,12 +180,21 @@ export function TodoItem({ todo, onEdit, onRefresh }: TodoItemProps) {
             Complete
           </button>
         )}
-        <button className="btn btn-small btn-edit" onClick={() => onEdit(todo)}>
-          Edit
-        </button>
-        <button className="btn btn-small btn-delete" onClick={handleDelete}>
-          Delete
-        </button>
+        {canEdit && (
+          <button className="btn btn-small btn-edit" onClick={() => onEdit(todo)}>
+            Edit
+          </button>
+        )}
+        {isOwner && (
+          <button className="btn btn-small btn-share" onClick={() => onShare(todo)}>
+            Share
+          </button>
+        )}
+        {canEdit && (
+          <button className="btn btn-small btn-delete" onClick={handleDelete}>
+            Delete
+          </button>
+        )}
       </div>
     </div>
   );

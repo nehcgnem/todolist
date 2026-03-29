@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { ConflictError, DependencyError } from '../services/todoService';
+import { AuthError } from '../services/authService';
 
 export function errorHandler(err: Error, req: Request, res: Response, next: NextFunction): void {
   console.error(`[ERROR] ${err.name}: ${err.message}`);
@@ -12,6 +13,18 @@ export function errorHandler(err: Error, req: Request, res: Response, next: Next
         path: e.path.join('.'),
         message: e.message,
       })),
+    });
+    return;
+  }
+
+  if (err instanceof AuthError) {
+    // Distinguish between 401 (bad credentials) and 409 (duplicate)
+    const isDuplicate =
+      err.message.includes('already registered') || err.message.includes('already taken');
+    const status = isDuplicate ? 409 : 401;
+    res.status(status).json({
+      error: isDuplicate ? 'Conflict' : 'Authentication Error',
+      message: err.message,
     });
     return;
   }
@@ -43,6 +56,14 @@ export function errorHandler(err: Error, req: Request, res: Response, next: Next
   if (err.message.includes('not deleted')) {
     res.status(400).json({
       error: 'Bad Request',
+      message: err.message,
+    });
+    return;
+  }
+
+  if (err.message.includes('permission') || err.message.includes('Forbidden')) {
+    res.status(403).json({
+      error: 'Forbidden',
       message: err.message,
     });
     return;

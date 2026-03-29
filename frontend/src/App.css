@@ -33,6 +33,21 @@ body {
   color: #2c3e50;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-info {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.user-info strong {
+  color: #2c3e50;
+}
+
 /* Buttons */
 .btn {
   padding: 8px 16px;
@@ -88,6 +103,11 @@ body {
   color: white;
 }
 
+.btn-share {
+  background: #8e44ad;
+  color: white;
+}
+
 /* Filter Bar */
 .filter-bar {
   display: flex;
@@ -113,6 +133,15 @@ body {
   min-width: 200px;
 }
 
+/* DnD Instructions */
+.dnd-instructions {
+  text-align: center;
+  font-size: 0.78rem;
+  color: #999;
+  margin-bottom: 8px;
+  font-style: italic;
+}
+
 /* TODO List */
 .todo-list {
   display: flex;
@@ -123,14 +152,13 @@ body {
 /* TODO Item */
 .todo-item {
   display: flex;
-  justify-content: space-between;
   align-items: flex-start;
   padding: 14px 18px;
   background: white;
   border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   border-left: 4px solid #bdc3c7;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
 }
 
 .todo-item.not_started {
@@ -159,6 +187,36 @@ body {
   background: #fef3cd;
 }
 
+.todo-item.drop-target {
+  background: #e8f4fd;
+  border-color: #3498db;
+  box-shadow: 0 0 0 2px #3498db44;
+}
+
+.todo-item.drag-overlay {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  transform: rotate(2deg);
+}
+
+/* Drag Handle */
+.drag-handle {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px 4px 0;
+  cursor: grab;
+  color: #ccc;
+  flex-shrink: 0;
+  touch-action: none;
+}
+
+.drag-handle:hover {
+  color: #999;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
 .todo-item-main {
   flex: 1;
   min-width: 0;
@@ -175,7 +233,8 @@ body {
 .status-badge,
 .blocked-badge,
 .recurrence-badge,
-.overdue-badge {
+.overdue-badge,
+.share-role-indicator {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 3px;
@@ -216,6 +275,11 @@ body {
 .overdue-badge {
   background: #e74c3c;
   color: white;
+}
+
+.share-role-indicator {
+  background: #d5f5e3;
+  color: #2e7d32;
 }
 
 .todo-item-name {
@@ -333,6 +397,72 @@ body {
   font-size: 0.9rem;
 }
 
+/* Dependency Feedback */
+.dependency-feedback {
+  padding: 10px 14px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.dependency-feedback.success {
+  background: #d5f5e3;
+  color: #2e7d32;
+}
+
+.dependency-feedback.error {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+/* Dependency List */
+.dependency-list {
+  margin-top: 16px;
+  padding: 12px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.dependency-list-title {
+  font-size: 0.9rem;
+  color: #2c3e50;
+  margin-bottom: 8px;
+}
+
+.dependency-list-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dependency-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  background: #f8f9fa;
+  border-radius: 4px;
+}
+
+.dep-from {
+  color: #e74c3c;
+  font-weight: 500;
+}
+
+.dep-arrow {
+  color: #999;
+  font-style: italic;
+  font-size: 0.75rem;
+}
+
+.dep-to {
+  color: #27ae60;
+  font-weight: 500;
+}
+
 /* Pagination */
 .pagination {
   display: flex;
@@ -360,6 +490,194 @@ body {
   font-size: 0.85rem;
 }
 
+/* Auth Page */
+.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: #f5f7fa;
+  padding: 20px;
+}
+
+.auth-card {
+  background: white;
+  padding: 40px;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 420px;
+}
+
+.auth-title {
+  font-size: 2rem;
+  color: #2c3e50;
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.auth-subtitle {
+  text-align: center;
+  color: #888;
+  margin-bottom: 24px;
+  font-size: 0.95rem;
+}
+
+.auth-form .form-group {
+  margin-bottom: 16px;
+}
+
+.auth-submit {
+  width: 100%;
+  padding: 12px;
+  font-size: 1rem;
+}
+
+.auth-switch {
+  text-align: center;
+  margin-top: 16px;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.auth-switch-btn {
+  background: none;
+  border: none;
+  color: #3498db;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0;
+}
+
+.auth-switch-btn:hover {
+  text-decoration: underline;
+}
+
+/* Share Dialog */
+.share-dialog {
+  max-width: 550px;
+}
+
+.share-form {
+  margin-bottom: 20px;
+}
+
+.share-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.btn-share-add {
+  margin-bottom: 14px;
+  white-space: nowrap;
+}
+
+.share-list h3 {
+  font-size: 0.95rem;
+  color: #2c3e50;
+  margin-bottom: 8px;
+}
+
+.share-empty {
+  color: #888;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.share-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+
+.share-item-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.share-item-info strong {
+  font-size: 0.9rem;
+}
+
+.share-item-email {
+  font-size: 0.75rem;
+  color: #888;
+}
+
+.share-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.share-role-select {
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.share-role-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: #ecf0f1;
+  padding: 2px 8px;
+  border-radius: 3px;
+  color: #555;
+}
+
+/* Search Dropdown */
+.search-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  z-index: 50;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.search-dropdown-item {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.85rem;
+}
+
+.search-dropdown-item:hover {
+  background: #f0f0f0;
+}
+
+.search-dropdown-email {
+  font-size: 0.75rem;
+  color: #888;
+}
+
+.search-loading {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  color: #888;
+}
+
 /* States */
 .loading,
 .empty-state {
@@ -371,6 +689,16 @@ body {
 
 /* Responsive */
 @media (max-width: 640px) {
+  .app-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .header-right {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
   .filter-bar {
     flex-direction: column;
   }
@@ -387,5 +715,13 @@ body {
     flex-direction: row;
     margin-left: 0;
     margin-top: 10px;
+  }
+
+  .share-input-row {
+    flex-direction: column;
+  }
+
+  .btn-share-add {
+    margin-bottom: 0;
   }
 }

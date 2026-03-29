@@ -18,8 +18,30 @@ export enum RecurrencePattern {
   CUSTOM = 'custom',
 }
 
+export enum ShareRole {
+  VIEWER = 'viewer',
+  EDITOR = 'editor',
+}
+
+export interface User {
+  id: string;
+  email: string;
+  username: string;
+  passwordHash: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserPublic {
+  id: string;
+  email: string;
+  username: string;
+  createdAt: string;
+}
+
 export interface Todo {
   id: string;
+  userId: string;
   name: string;
   description: string;
   dueDate: string | null;
@@ -37,6 +59,20 @@ export interface Todo {
 export interface TodoDependency {
   todoId: string;
   dependsOnId: string;
+}
+
+export interface TodoShare {
+  id: string;
+  todoId: string;
+  ownerId: string;
+  sharedWithId: string;
+  role: ShareRole;
+  createdAt: string;
+}
+
+export interface TodoShareWithUser extends TodoShare {
+  sharedWithUsername: string;
+  sharedWithEmail: string;
 }
 
 export interface CreateTodoInput {
@@ -71,6 +107,7 @@ export interface TodoFilter {
   dependencyStatus?: 'blocked' | 'unblocked';
   includeDeleted?: boolean;
   search?: string;
+  includeShared?: boolean;
 }
 
 export interface TodoSort {
@@ -94,4 +131,29 @@ export interface PaginatedResult<T> {
 export interface TodoWithDependencies extends Todo {
   dependsOn: string[];
   isBlocked: boolean;
+  shares?: TodoShareWithUser[];
+  shareRole?: ShareRole | 'owner'; // the current user's role for this todo
+}
+
+export interface ShareTodoInput {
+  todoId: string;
+  sharedWithEmail: string;
+  role: ShareRole;
+}
+
+export interface RegisterInput {
+  email: string;
+  username: string;
+  password: string;
+}
+
+export interface LoginInput {
+  email: string;
+  password: string;
+}
+
+export interface AuthTokenPayload {
+  userId: string;
+  email: string;
+  username: string;
 }
