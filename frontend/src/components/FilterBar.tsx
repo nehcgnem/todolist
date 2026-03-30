@@ -10,6 +10,7 @@ export function FilterBar({ filters, onFilterChange }: FilterBarProps) {
   return (
     <div className="filter-bar">
       <div className="filter-group">
+        <label>Search</label>
         <input
           type="text"
           placeholder="Search..."
@@ -20,6 +21,7 @@ export function FilterBar({ filters, onFilterChange }: FilterBarProps) {
       </div>
 
       <div className="filter-group">
+        <label>Status</label>
         <select
           value={filters.status || ''}
           onChange={(e) => onFilterChange({ status: e.target.value })}
@@ -33,6 +35,7 @@ export function FilterBar({ filters, onFilterChange }: FilterBarProps) {
       </div>
 
       <div className="filter-group">
+        <label>Priority</label>
         <select
           value={filters.priority || ''}
           onChange={(e) => onFilterChange({ priority: e.target.value })}
@@ -45,6 +48,7 @@ export function FilterBar({ filters, onFilterChange }: FilterBarProps) {
       </div>
 
       <div className="filter-group">
+        <label>Dependencies</label>
         <select
           value={filters.dependencyStatus || ''}
           onChange={(e) => onFilterChange({ dependencyStatus: e.target.value })}
@@ -56,11 +60,12 @@ export function FilterBar({ filters, onFilterChange }: FilterBarProps) {
       </div>
 
       <div className="filter-group">
+        <label>Sort By</label>
         <select
           value={filters.sortField || ''}
           onChange={(e) => onFilterChange({ sortField: e.target.value })}
         >
-          <option value="">Default Sort</option>
+          <option value="">Date Created</option>
           <option value="dueDate">Due Date</option>
           <option value="priority">Priority</option>
           <option value="status">Status</option>
@@ -69,6 +74,7 @@ export function FilterBar({ filters, onFilterChange }: FilterBarProps) {
       </div>
 
       <div className="filter-group">
+        <label>Direction</label>
         <select
           value={filters.sortDirection || 'asc'}
           onChange={(e) => onFilterChange({ sortDirection: e.target.value })}

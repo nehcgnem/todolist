@@ -129,6 +129,14 @@ body {
   background: white;
 }
 
+.filter-group label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 4px;
+}
+
 .search-input {
   min-width: 200px;
 }
