@@ -1,6 +1,5 @@
-import { useSortable } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
-import { useDroppable } from '@dnd-kit/core';
+import { useState } from 'react';
+import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { TodoStatus } from '../types/todo';
 import type { Todo } from '../types/todo';
 import { todoApi } from '../api/todoApi';
@@ -8,6 +7,7 @@ import { useAuth } from '../hooks/useAuth';
 
 interface TodoItemProps {
   todo: Todo;
+  allTodos: Todo[];
   onEdit: (todo: Todo) => void;
   onRefresh: () => void;
   onShare: (todo: Todo) => void;
@@ -21,43 +21,57 @@ const STATUS_LABELS: Record<string, string> = {
   archived: 'Archived',
 };
 
+const STATUS_ICONS: Record<string, string> = {
+  not_started: '\u25cb',   // empty circle
+  in_progress: '\u25d4',   // half circle
+  completed: '\u2714',     // checkmark
+  archived: '\u2716',      // X
+};
+
 const PRIORITY_COLORS: Record<string, string> = {
   high: '#e74c3c',
   medium: '#f39c12',
   low: '#27ae60',
 };
 
-export function TodoItem({ todo, onEdit, onRefresh, onShare, isDragOverlay }: TodoItemProps) {
+export function TodoItem({ todo, allTodos, onEdit, onRefresh, onShare, isDragOverlay }: TodoItemProps) {
   const { user } = useAuth();
   const isOwner = todo.userId === user?.id;
   const canEdit = isOwner || todo.shareRole === 'editor';
+  const [removingDep, setRemovingDep] = useState<string | null>(null);
 
-  // Sortable (for drag)
+  // Draggable (drag source)
   const {
     attributes,
     listeners,
-    setNodeRef: setSortableRef,
+    setNodeRef: setDraggableRef,
     transform,
-    transition,
     isDragging,
-  } = useSortable({
+  } = useDraggable({
     id: todo.id,
     data: { type: 'todo', todo },
   });
 
-  // Droppable (for dependency drop targets)
+  // Droppable (drop target for dependency linking)
   const { isOver, setNodeRef: setDroppableRef } = useDroppable({
     id: `drop-${todo.id}`,
-    data: { type: 'todo-drop', todoId: todo.id },
+    data: { type: 'todo', todo },
   });
 
   const style = isDragOverlay
     ? { opacity: 0.9 }
     : {
-        transform: CSS.Transform.toString(transform),
-        transition,
-        opacity: isDragging ? 0.4 : 1,
+        transform: transform
+          ? `translate3d(${transform.x}px, ${transform.y}px, 0)`
+          : undefined,
+        opacity: isDragging ? 0.3 : 1,
       };
+
+  // Merge draggable + droppable refs onto the same element
+  const setRefs = (el: HTMLDivElement | null) => {
+    setDraggableRef(el);
+    setDroppableRef(el);
+  };
 
   const handleDelete = async () => {
     if (!confirm(`Delete "${todo.name}"? It can be restored later.`)) return;
@@ -78,6 +92,19 @@ export function TodoItem({ todo, onEdit, onRefresh, onShare, isDragOverlay }: To
     }
   };
 
+  const handleRemoveDependency = async (depId: string) => {
+    setRemovingDep(depId);
+    try {
+      const newDeps = todo.dependsOn.filter((id) => id !== depId);
+      await todoApi.update(todo.id, { dependsOn: newDeps, version: todo.version });
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setRemovingDep(null);
+    }
+  };
+
   const isOverdue =
     todo.dueDate &&
     new Date(todo.dueDate) < new Date() &&
@@ -95,11 +122,20 @@ export function TodoItem({ todo, onEdit, onRefresh, onShare, isDragOverlay }: To
     });
   };
 
-  // Merge refs
-  const setRefs = (el: HTMLDivElement | null) => {
-    setSortableRef(el);
-    setDroppableRef(el);
-  };
+  // Resolve dependency IDs to full todo objects
+  const resolvedDeps = todo.dependsOn
+    .map((depId) => allTodos.find((t) => t.id === depId))
+    .filter((t): t is Todo => t !== undefined);
+
+  // Separate blocking (incomplete) and completed dependencies
+  const blockingDeps = resolvedDeps.filter(
+    (d) => d.status !== TodoStatus.COMPLETED && !d.isDeleted
+  );
+  const completedDeps = resolvedDeps.filter(
+    (d) => d.status === TodoStatus.COMPLETED
+  );
+  // IDs that we couldn't resolve (e.g. on a different page)
+  const unresolvedCount = todo.dependsOn.length - resolvedDeps.length;
 
   return (
     <div
@@ -107,6 +143,10 @@ export function TodoItem({ todo, onEdit, onRefresh, onShare, isDragOverlay }: To
       style={style}
       className={`todo-item ${todo.status} ${isOverdue ? 'overdue' : ''} ${todo.isBlocked ? 'blocked' : ''} ${isOver ? 'drop-target' : ''} ${isDragOverlay ? 'drag-overlay' : ''}`}
     >
+      {isOver && !isDragOverlay && (
+        <div className="drop-zone-label">Drop to add dependency</div>
+      )}
+
       <div className="drag-handle" {...attributes} {...listeners}>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
           <circle cx="5" cy="3" r="1.5" />
@@ -129,7 +169,11 @@ export function TodoItem({ todo, onEdit, onRefresh, onShare, isDragOverlay }: To
           <span className={`status-badge status-${todo.status}`}>
             {STATUS_LABELS[todo.status]}
           </span>
-          {todo.isBlocked && <span className="blocked-badge">BLOCKED</span>}
+          {todo.isBlocked && (
+            <span className="blocked-badge" title={`Blocked by: ${blockingDeps.map(d => d.name).join(', ')}`}>
+              BLOCKED ({blockingDeps.length})
+            </span>
+          )}
           {todo.recurrencePattern && (
             <span className="recurrence-badge">
               Recurring: {todo.recurrencePattern}
@@ -152,11 +196,68 @@ export function TodoItem({ todo, onEdit, onRefresh, onShare, isDragOverlay }: To
           <p className="todo-item-description">{todo.description}</p>
         )}
 
+        {/* Inline dependency chips */}
+        {todo.dependsOn.length > 0 && (
+          <div className="todo-dep-section">
+            <span className="todo-dep-label">Depends on:</span>
+            <div className="todo-dep-chips">
+              {blockingDeps.map((dep) => (
+                <span
+                  key={dep.id}
+                  className="dep-chip dep-chip-blocking"
+                  title={`${dep.name} (${STATUS_LABELS[dep.status]}) - blocking`}
+                >
+                  <span className="dep-chip-icon">{STATUS_ICONS[dep.status]}</span>
+                  <span className="dep-chip-name">
+                    {dep.name.length > 30 ? dep.name.slice(0, 30) + '...' : dep.name}
+                  </span>
+                  {canEdit && (
+                    <button
+                      className="dep-chip-remove"
+                      onClick={() => handleRemoveDependency(dep.id)}
+                      disabled={removingDep === dep.id}
+                      title="Remove dependency"
+                      aria-label={`Remove dependency on ${dep.name}`}
+                    >
+                      {removingDep === dep.id ? '...' : '\u00d7'}
+                    </button>
+                  )}
+                </span>
+              ))}
+              {completedDeps.map((dep) => (
+                <span
+                  key={dep.id}
+                  className="dep-chip dep-chip-completed"
+                  title={`${dep.name} (Completed)`}
+                >
+                  <span className="dep-chip-icon">{STATUS_ICONS[dep.status]}</span>
+                  <span className="dep-chip-name">
+                    {dep.name.length > 30 ? dep.name.slice(0, 30) + '...' : dep.name}
+                  </span>
+                  {canEdit && (
+                    <button
+                      className="dep-chip-remove"
+                      onClick={() => handleRemoveDependency(dep.id)}
+                      disabled={removingDep === dep.id}
+                      title="Remove dependency"
+                      aria-label={`Remove dependency on ${dep.name}`}
+                    >
+                      {removingDep === dep.id ? '...' : '\u00d7'}
+                    </button>
+                  )}
+                </span>
+              ))}
+              {unresolvedCount > 0 && (
+                <span className="dep-chip dep-chip-unresolved" title="Dependencies not on this page">
+                  +{unresolvedCount} more
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="todo-item-meta">
           <span>Due: {formatDate(todo.dueDate)}</span>
-          {todo.dependsOn.length > 0 && (
-            <span>Dependencies: {todo.dependsOn.length}</span>
-          )}
           {todo.shares && todo.shares.length > 0 && (
             <span>Shared with {todo.shares.length} user{todo.shares.length > 1 ? 's' : ''}</span>
           )}

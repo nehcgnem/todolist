@@ -10,6 +10,20 @@ interface TodoFormProps {
   onCancel: () => void;
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  not_started: 'Not Started',
+  in_progress: 'In Progress',
+  completed: 'Completed',
+  archived: 'Archived',
+};
+
+const STATUS_ICONS: Record<string, string> = {
+  not_started: '\u25cb',
+  in_progress: '\u25d4',
+  completed: '\u2714',
+  archived: '\u2716',
+};
+
 export function TodoForm({ todo, allTodos, onSaved, onCancel }: TodoFormProps) {
   const isEditing = !!todo;
   const [name, setName] = useState(todo?.name || '');
@@ -26,6 +40,7 @@ export function TodoForm({ todo, allTodos, onSaved, onCancel }: TodoFormProps) {
   const [dependsOn, setDependsOn] = useState<string[]>(todo?.dependsOn || []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [depSearchQuery, setDepSearchQuery] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,6 +79,28 @@ export function TodoForm({ todo, allTodos, onSaved, onCancel }: TodoFormProps) {
   const availableDeps = allTodos.filter(
     (t) => t.id !== todo?.id && !t.isDeleted
   );
+
+  // Filter by search query
+  const filteredDeps = depSearchQuery
+    ? availableDeps.filter((t) =>
+        t.name.toLowerCase().includes(depSearchQuery.toLowerCase())
+      )
+    : availableDeps;
+
+  const toggleDep = (id: string) => {
+    setDependsOn((prev) =>
+      prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]
+    );
+  };
+
+  const removeDep = (id: string) => {
+    setDependsOn((prev) => prev.filter((d) => d !== id));
+  };
+
+  // Resolve selected dependencies to full objects for the "selected" display
+  const selectedDeps = dependsOn
+    .map((id) => allTodos.find((t) => t.id === id))
+    .filter((t): t is Todo => t !== undefined);
 
   return (
     <div className="todo-form-overlay">
@@ -156,27 +193,79 @@ export function TodoForm({ todo, allTodos, onSaved, onCancel }: TodoFormProps) {
           )}
         </div>
 
-        {availableDeps.length > 0 && (
-          <div className="form-group">
-            <label>Depends On</label>
-            <select
-              multiple
-              value={dependsOn}
-              onChange={(e) => {
-                const selected = Array.from(e.target.selectedOptions, (opt) => opt.value);
-                setDependsOn(selected);
-              }}
-              style={{ height: '100px' }}
-            >
-              {availableDeps.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.status})
-                </option>
+        {/* Dependency Picker */}
+        <div className="form-group">
+          <label>Dependencies ({dependsOn.length} selected)</label>
+
+          {/* Selected dependencies as removable chips */}
+          {selectedDeps.length > 0 && (
+            <div className="dep-picker-selected">
+              {selectedDeps.map((dep) => (
+                <span
+                  key={dep.id}
+                  className={`dep-picker-chip ${dep.status === TodoStatus.COMPLETED ? 'dep-picker-chip-done' : ''}`}
+                >
+                  <span className="dep-picker-chip-icon">{STATUS_ICONS[dep.status]}</span>
+                  {dep.name.length > 35 ? dep.name.slice(0, 35) + '...' : dep.name}
+                  <button
+                    type="button"
+                    className="dep-picker-chip-remove"
+                    onClick={() => removeDep(dep.id)}
+                    aria-label={`Remove ${dep.name}`}
+                  >
+                    {'\u00d7'}
+                  </button>
+                </span>
               ))}
-            </select>
-            <small>Hold Ctrl/Cmd to select multiple</small>
-          </div>
-        )}
+            </div>
+          )}
+
+          {/* Search + checkbox list */}
+          {availableDeps.length > 0 && (
+            <div className="dep-picker-dropdown">
+              <input
+                type="text"
+                className="dep-picker-search"
+                placeholder="Search tasks to add as dependency..."
+                value={depSearchQuery}
+                onChange={(e) => setDepSearchQuery(e.target.value)}
+              />
+              <div className="dep-picker-list">
+                {filteredDeps.length === 0 && (
+                  <div className="dep-picker-empty">No matching tasks found</div>
+                )}
+                {filteredDeps.map((t) => {
+                  const isSelected = dependsOn.includes(t.id);
+                  return (
+                    <label
+                      key={t.id}
+                      className={`dep-picker-option ${isSelected ? 'dep-picker-option-selected' : ''}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleDep(t.id)}
+                      />
+                      <span className={`dep-picker-status dep-picker-status-${t.status}`}>
+                        {STATUS_ICONS[t.status]}
+                      </span>
+                      <span className="dep-picker-option-name">
+                        {t.name.length > 50 ? t.name.slice(0, 50) + '...' : t.name}
+                      </span>
+                      <span className="dep-picker-option-badge">
+                        {STATUS_LABELS[t.status]}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {availableDeps.length === 0 && (
+            <div className="dep-picker-empty">No other tasks available to add as dependencies</div>
+          )}
+        </div>
 
         <div className="form-actions">
           <button type="submit" className="btn btn-primary" disabled={saving}>

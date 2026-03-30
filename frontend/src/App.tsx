@@ -10,10 +10,6 @@ import {
   type DragStartEvent,
   type DragEndEvent,
 } from '@dnd-kit/core';
-import {
-  SortableContext,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
 import { useAuth } from './hooks/useAuth';
 import { useTodos } from './hooks/useTodos';
 import { AuthPage } from './components/AuthPage';
@@ -98,43 +94,41 @@ function AppContent() {
       const { active, over } = event;
       if (!over) return;
 
-      const draggedTodoId = active.id as string;
       const droppedOnData = over.data.current;
+      if (droppedOnData?.type !== 'todo') return;
 
-      // Check if dropped on a different todo's drop zone
-      if (droppedOnData?.type === 'todo-drop') {
-        const targetTodoId = droppedOnData.todoId as string;
+      const draggedTodoId = active.id as string;
+      const targetTodo = droppedOnData.todo as Todo;
+      const targetTodoId = targetTodo.id;
 
-        if (draggedTodoId === targetTodoId) return;
+      // Ignore drop on self
+      if (draggedTodoId === targetTodoId) return;
 
-        const draggedTodo = todos.find((t) => t.id === draggedTodoId);
-        const targetTodo = todos.find((t) => t.id === targetTodoId);
+      const draggedTodo = todos.find((t) => t.id === draggedTodoId);
+      if (!draggedTodo) return;
 
-        if (!draggedTodo || !targetTodo) return;
+      // Dependency direction: target depends on dragged task
+      // (drop A onto B = B now depends on A)
+      if (targetTodo.dependsOn.includes(draggedTodoId)) {
+        setDependencyFeedback(`"${targetTodo.name}" already depends on "${draggedTodo.name}"`);
+        setTimeout(() => setDependencyFeedback(null), 3000);
+        return;
+      }
 
-        // Add dependency: dragged todo depends on target todo (drag A onto B = A depends on B)
-        // Check if already depends
-        if (draggedTodo.dependsOn.includes(targetTodoId)) {
-          setDependencyFeedback(`"${draggedTodo.name}" already depends on "${targetTodo.name}"`);
-          setTimeout(() => setDependencyFeedback(null), 3000);
-          return;
-        }
-
-        try {
-          const newDeps = [...draggedTodo.dependsOn, targetTodoId];
-          await todoApi.update(draggedTodoId, {
-            dependsOn: newDeps,
-            version: draggedTodo.version,
-          });
-          setDependencyFeedback(
-            `Dependency added: "${draggedTodo.name}" now depends on "${targetTodo.name}"`
-          );
-          setTimeout(() => setDependencyFeedback(null), 3000);
-          refresh();
-        } catch (err: any) {
-          setDependencyFeedback(`Failed: ${err.message}`);
-          setTimeout(() => setDependencyFeedback(null), 4000);
-        }
+      try {
+        const newDeps = [...targetTodo.dependsOn, draggedTodoId];
+        await todoApi.update(targetTodoId, {
+          dependsOn: newDeps,
+          version: targetTodo.version,
+        });
+        setDependencyFeedback(
+          `Dependency added: "${targetTodo.name}" now depends on "${draggedTodo.name}"`
+        );
+        setTimeout(() => setDependencyFeedback(null), 3000);
+        refresh();
+      } catch (err: any) {
+        setDependencyFeedback(`Failed: ${err.message}`);
+        setTimeout(() => setDependencyFeedback(null), 4000);
       }
     },
     [todos, refresh]
@@ -167,7 +161,8 @@ function AppContent() {
       )}
 
       <div className="dnd-instructions">
-        Drag a task onto another to create a dependency (dragged task will depend on the target).
+        <span className="dnd-instructions-icon">{'\u{1f517}'}</span>
+        Drag a task and drop it onto another to add it as a dependency. The drop target will depend on the dragged task.
       </div>
 
       <DndContext
@@ -176,32 +171,32 @@ function AppContent() {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <SortableContext items={todos.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-          <div className="todo-list">
-            {loading && todos.length === 0 && <div className="loading">Loading...</div>}
+        <div className="todo-list">
+          {loading && todos.length === 0 && <div className="loading">Loading...</div>}
 
-            {!loading && todos.length === 0 && (
-              <div className="empty-state">
-                <p>No TODOs found. Create one to get started!</p>
-              </div>
-            )}
+          {!loading && todos.length === 0 && (
+            <div className="empty-state">
+              <p>No TODOs found. Create one to get started!</p>
+            </div>
+          )}
 
-            {todos.map((todo) => (
-              <TodoItem
-                key={todo.id}
-                todo={todo}
-                onEdit={handleEdit}
-                onRefresh={refresh}
-                onShare={handleShare}
-              />
-            ))}
-          </div>
-        </SortableContext>
+          {todos.map((todo) => (
+            <TodoItem
+              key={todo.id}
+              todo={todo}
+              allTodos={todos}
+              onEdit={handleEdit}
+              onRefresh={refresh}
+              onShare={handleShare}
+            />
+          ))}
+        </div>
 
         <DragOverlay>
           {activeDrag ? (
             <TodoItem
               todo={activeDrag}
+              allTodos={todos}
               onEdit={() => {}}
               onRefresh={() => {}}
               onShare={() => {}}
