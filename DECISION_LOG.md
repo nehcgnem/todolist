@@ -86,7 +86,7 @@
 
 The `TodoService` class encapsulates all business logic: CRUD, dependency validation, recurrence, and optimistic locking. Routes are thin — they parse/validate input, call the service, and format the HTTP response. Benefits:
 
-1. **Testability:** 31 unit tests run the service directly against in-memory SQLite, with no HTTP overhead.
+1. **Testability:** 39 unit tests run the service directly against in-memory SQLite, with no HTTP overhead.
 2. **Replaceability:** The service depends on a `Database` instance, not on Express. Swapping to PostgreSQL requires only changing the database module and SQL dialect.
 3. **Readability:** Business rules live in one place. Route handlers read as input -> process -> output.
 
@@ -145,17 +145,13 @@ The API client (`todoApi.ts`) is a thin wrapper around `fetch` with consistent e
 
 ## 3. What I Chose NOT to Build
 
-1. **User authentication** — Listed as nice-to-have. Adding JWT/session auth would roughly double the codebase (user model, registration, login, token refresh, per-user data scoping) without adding core TODO functionality. The current design uses a single shared TODO list.
+1. **Bulk operations** — Nice-to-have. Endpoints like "complete all tasks in a group" or "delete selected" are useful UX features but not core. Individual CRUD covers the required functionality.
 
-2. **Real-time updates (WebSocket/SSE)** — Nice-to-have. Would enable instant cross-tab/cross-user sync. The current approach requires manual refresh. For a demo, this is acceptable.
+2. **Production database (PostgreSQL)** — SQLite is sufficient for local demo and avoids requiring external services. The service layer is database-aware but not database-coupled, so migration would be contained.
 
-3. **Bulk operations** — Nice-to-have. Endpoints like "complete all tasks in a group" or "delete selected" are useful UX features but not core. Individual CRUD covers the required functionality.
+3. **Advanced UI polish** — The UI is functional and responsive, but minimal. I prioritized feature completeness and correctness over visual refinement.
 
-4. **Production database (PostgreSQL)** — SQLite is sufficient for local demo and avoids requiring external services. The service layer is database-aware but not database-coupled, so migration would be contained.
-
-5. **Advanced UI polish** — The UI is functional and responsive, but minimal. I prioritized feature completeness and correctness over visual refinement.
-
-6. **E2E tests** — Browser-based tests (Playwright/Cypress) would verify the full user flow. I prioritized unit and integration tests for the core business logic, which cover the most critical paths with less infrastructure overhead.
+4. **E2E tests** — Browser-based tests (Playwright/Cypress) would verify the full user flow. I prioritized unit and integration tests for the core business logic, which cover the most critical paths with less infrastructure overhead.
 
 ---
 
@@ -165,18 +161,14 @@ The API client (`todoApi.ts`) is a thin wrapper around `fetch` with consistent e
 
 2. **Repository pattern** — Extract a `TodoRepository` interface that the service depends on, with SQLite and PostgreSQL implementations. This would make the service truly database-agnostic and enable mock-based unit tests.
 
-3. **WebSocket real-time updates** — On every write operation, broadcast the change to all connected clients. This would make multi-user collaboration seamless and eliminate the need for manual refresh.
+3. **Better recurring task management** — A dedicated UI panel for viewing the full recurrence chain, editing the pattern for all future occurrences, and skipping or rescheduling individual occurrences.
 
-4. **Authentication + per-user lists** — JWT-based auth with `userId` scoping on all queries. Each user would see only their own TODOs. Admin roles could enable shared lists.
+4. **Full Docker Compose** — A `docker-compose.yml` with backend, frontend (nginx), and PostgreSQL services. One command to bring up the full production-like stack.
 
-5. **Better recurring task management** — A dedicated UI panel for viewing the full recurrence chain, editing the pattern for all future occurrences, and skipping or rescheduling individual occurrences.
+5. **E2E tests** — Playwright tests for the complete user flow: create -> edit -> filter -> complete recurring -> check next occurrence -> delete -> restore.
 
-6. **Full Docker Compose** — A `docker-compose.yml` with backend, frontend (nginx), and PostgreSQL services. One command to bring up the full production-like stack.
+6. **Undo/redo stack** — The soft delete infrastructure could be extended to a general-purpose undo mechanism for all operations, likely via an event/audit log table.
 
-7. **E2E tests** — Playwright tests for the complete user flow: create -> edit -> filter -> complete recurring -> check next occurrence -> delete -> restore.
+7. **API rate limiting** — `express-rate-limit` middleware to prevent abuse, especially important now that authentication is in place.
 
-8. **Undo/redo stack** — The soft delete infrastructure could be extended to a general-purpose undo mechanism for all operations, likely via an event/audit log table.
-
-9. **API rate limiting** — `express-rate-limit` middleware to prevent abuse, especially important once authentication is added.
-
-10. **Observability** — Structured logging (pino), request tracing, and basic metrics for production monitoring.
+8. **Observability** — Structured logging (pino), request tracing, and basic metrics for production monitoring.
