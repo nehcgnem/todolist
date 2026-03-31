@@ -137,7 +137,7 @@ function AppContent() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>TODO List</h1>
+        <h1>Task Dashboard</h1>
         <div className="header-right">
           <span className="user-info">
             Signed in as <strong>{user?.username}</strong>
