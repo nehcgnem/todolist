@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent } from 'react';
-import { todoApi, authApi } from '../api/todoApi';
+import { todoApi } from '../api/todoApi';
 import { ShareRole } from '../types/todo';
-import type { Todo, TodoShare, User } from '../types/todo';
+import type { Todo, TodoShare } from '../types/todo';
 
 interface ShareDialogProps {
   todo: Todo;
@@ -15,8 +15,6 @@ export function ShareDialog({ todo, onClose, onChanged }: ShareDialogProps) {
   const [role, setRole] = useState<string>(ShareRole.VIEWER);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [searchResults, setSearchResults] = useState<User[]>([]);
-  const [searching, setSearching] = useState(false);
 
   useEffect(() => {
     loadShares();
@@ -31,23 +29,6 @@ export function ShareDialog({ todo, onClose, onChanged }: ShareDialogProps) {
     }
   };
 
-  const handleSearch = async (query: string) => {
-    setEmail(query);
-    if (query.length < 2) {
-      setSearchResults([]);
-      return;
-    }
-    setSearching(true);
-    try {
-      const users = await authApi.searchUsers(query);
-      setSearchResults(users);
-    } catch {
-      setSearchResults([]);
-    } finally {
-      setSearching(false);
-    }
-  };
-
   const handleShare = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -55,7 +36,6 @@ export function ShareDialog({ todo, onClose, onChanged }: ShareDialogProps) {
     try {
       await todoApi.shareTodo(todo.id, { sharedWithEmail: email, role });
       setEmail('');
-      setSearchResults([]);
       await loadShares();
       onChanged();
     } catch (err: any) {
@@ -98,34 +78,15 @@ export function ShareDialog({ todo, onClose, onChanged }: ShareDialogProps) {
         {isOwner && (
           <form onSubmit={handleShare} className="share-form">
             <div className="share-input-row">
-              <div className="form-group" style={{ flex: 2, position: 'relative' }}>
-                <label>User email or username</label>
+              <div className="form-group" style={{ flex: 2 }}>
+                <label>User email</label>
                 <input
-                  type="text"
+                  type="email"
                   value={email}
-                  onChange={(e) => handleSearch(e.target.value)}
-                  placeholder="Search by email or username..."
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Enter email address..."
                   required
                 />
-                {searchResults.length > 0 && (
-                  <div className="search-dropdown">
-                    {searchResults.map((user) => (
-                      <button
-                        key={user.id}
-                        type="button"
-                        className="search-dropdown-item"
-                        onClick={() => {
-                          setEmail(user.email);
-                          setSearchResults([]);
-                        }}
-                      >
-                        <strong>{user.username}</strong>
-                        <span className="search-dropdown-email">{user.email}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {searching && <div className="search-loading">Searching...</div>}
               </div>
               <div className="form-group" style={{ flex: 1 }}>
                 <label>Role</label>

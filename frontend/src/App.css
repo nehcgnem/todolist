@@ -1068,50 +1068,6 @@ body {
 }
 
 /* Search Dropdown */
-.search-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  background: white;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  z-index: 50;
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.search-dropdown-item {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  padding: 8px 12px;
-  border: none;
-  background: none;
-  cursor: pointer;
-  text-align: left;
-  font-size: 0.85rem;
-}
-
-.search-dropdown-item:hover {
-  background: #f0f0f0;
-}
-
-.search-dropdown-email {
-  font-size: 0.75rem;
-  color: #888;
-}
-
-.search-loading {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  padding: 8px 12px;
-  font-size: 0.8rem;
-  color: #888;
-}
-
 /* States */
 .loading,
 .empty-state {

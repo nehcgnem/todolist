@@ -57,10 +57,6 @@ export const authApi = {
   me(): Promise<User> {
     return request('/auth/me');
   },
-
-  searchUsers(query: string): Promise<User[]> {
-    return request(`/auth/users/search?q=${encodeURIComponent(query)}`);
-  },
 };
 
 // Todo API
