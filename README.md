@@ -25,6 +25,34 @@ A full-stack TODO list application with authentication, real-time collaboration,
 - **Input Validation** — Zod-based request validation with descriptive error messages
 - **API Documentation** — Interactive Swagger UI at `/api-docs`
 
+## Screenshots
+
+<!-- Add your screenshots to docs/screenshots/ and they will render below -->
+
+### Login & Registration
+
+![Login page](docs/screenshots/login.png)
+
+### Task Dashboard
+
+![Task dashboard](docs/screenshots/dashboard.png)
+
+### Create / Edit Task
+
+![Create task form](docs/screenshots/create-task.png)
+
+### Task Dependencies
+
+![Dependency overlay](docs/screenshots/dependencies.png)
+
+### Share Dialog
+
+![Share dialog](docs/screenshots/share-dialog.png)
+
+### Swagger API Docs
+
+![Swagger UI](docs/screenshots/swagger.png)
+
 ## Prerequisites
 
 - Node.js 18+ (tested with v22)
